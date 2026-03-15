@@ -1,6 +1,6 @@
 #!/bin/bash
 # hackprobe - Install all required security tools
-# Supports macOS (Homebrew) and Linux (apt/go/pip/cargo)
+# Supports macOS (Homebrew) and Linux (apt/go/pipx/cargo)
 
 set -e
 
@@ -15,14 +15,13 @@ if [[ "$OS" == "Darwin" ]]; then
   command -v brew >/dev/null 2>&1 || { echo "Install Homebrew first: https://brew.sh"; exit 1; }
 
   echo "[1/5] Installing Homebrew packages..."
-  # Only tools that are NOT installed via Go below
-  brew install nmap sqlmap testssl feroxbuster trufflehog amass 2>/dev/null || true
+  brew install nmap sqlmap testssl feroxbuster trufflehog amass pipx 2>/dev/null || true
   echo "  Done"
 
 elif [[ "$OS" == "Linux" ]]; then
   echo "[1/5] Installing system packages..."
   sudo apt-get update -qq
-  sudo apt-get install -y -qq nmap testssl.sh sqlmap whois dnsutils 2>/dev/null || true
+  sudo apt-get install -y -qq nmap testssl.sh sqlmap whois dnsutils pipx 2>/dev/null || true
 
   # trufflehog - binary install on Linux
   if ! command -v trufflehog >/dev/null 2>&1; then
@@ -77,11 +76,34 @@ go install github.com/dwisiswant0/crlfuzz/cmd/crlfuzz@latest 2>/dev/null || true
 
 echo "  Done"
 
-# ── Python tools (cross-platform) ────────────────────────────────────────────
+# ── Python tools (via pipx - isolated envs, no PEP 668 conflicts) ────────────
 
 echo "[3/5] Installing Python packages..."
-command -v python3 >/dev/null 2>&1 || { echo "  Python3 not found"; exit 1; }
-pip3 install --user uro s3scanner wafw00f theHarvester arjun jwt-tool 2>/dev/null || true
+command -v pipx >/dev/null 2>&1 || { echo "  pipx not found, falling back to pip3..."; USE_PIP=1; }
+
+if [ "${USE_PIP:-}" = "1" ]; then
+  pip3 install --user --break-system-packages uro s3scanner wafw00f theHarvester arjun 2>&1 | tail -1 || true
+  pip3 install --user --break-system-packages jwt-tool 2>&1 | tail -1 || true
+else
+  pipx install uro 2>/dev/null || true
+  pipx install s3scanner 2>/dev/null || true
+  pipx install wafw00f 2>/dev/null || true
+  pipx install theHarvester 2>/dev/null || true
+  pipx install arjun 2>/dev/null || true
+
+  # jwt_tool needs special handling - clone and symlink
+  if ! command -v jwt_tool 2>/dev/null && ! command -v jwt_tool.py 2>/dev/null; then
+    JWT_DIR="$HOME/.local/share/jwt_tool"
+    if [ ! -d "$JWT_DIR" ]; then
+      git clone --quiet https://github.com/ticarpi/jwt_tool.git "$JWT_DIR" 2>/dev/null || true
+      pip3 install --user --break-system-packages -r "$JWT_DIR/requirements.txt" 2>/dev/null || true
+    fi
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$JWT_DIR/jwt_tool.py" "$HOME/.local/bin/jwt_tool" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/jwt_tool" 2>/dev/null || true
+  fi
+fi
+
 echo "  Done"
 
 # ── gf patterns ──────────────────────────────────────────────────────────────
@@ -101,6 +123,8 @@ echo "  Done"
 echo "[5/5] Verifying installations..."
 echo ""
 
+export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
+
 TOOLS="nmap sqlmap dalfox ffuf feroxbuster testssl subfinder amass dnsx httpx katana gau waybackurls trufflehog naabu gf qsreplace anew uro s3scanner wafw00f theHarvester arjun interactsh-client subzy crlfuzz"
 MISSING=""
 FOUND=0
@@ -117,9 +141,9 @@ for tool in $TOOLS; do
   fi
 done
 
-# jwt_tool check (pip package name differs from import)
+# jwt_tool check
 TOTAL=$((TOTAL + 1))
-if pip3 show jwt-tool >/dev/null 2>&1; then
+if command -v jwt_tool >/dev/null 2>&1 || command -v jwt_tool.py >/dev/null 2>&1; then
   echo "  ok  jwt_tool"
   FOUND=$((FOUND + 1))
 else
@@ -131,4 +155,7 @@ echo ""
 echo "=== $FOUND/$TOTAL tools installed ==="
 if [ -n "$MISSING" ]; then
   echo "Missing:$MISSING"
+  echo ""
+  echo "Re-run the script or install missing tools manually."
+  echo "Go tools need network access. Python tools need pipx."
 fi

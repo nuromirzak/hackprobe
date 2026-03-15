@@ -1,100 +1,46 @@
 # hackprobe
 
-AI-assisted black-box security audit skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+Black-box security audit as a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill. Orchestrates 25+ security tools with LLM reasoning to find business logic vulnerabilities that scanners miss.
 
-Combines 25+ CLI security tools with LLM reasoning to find vulnerabilities that scanners miss — business logic flaws, multi-step exploit chains, leaked secrets in public archives, unauthenticated payment/CRM injection, and framework-specific attack surfaces.
+## Quick start
 
-## What makes this different
+```bash
+# 1. Install tools (one-time)
+bash install.sh
 
-Traditional scanners (Nuclei, Burp, ZAP) match patterns against known vulnerability signatures. hackprobe adds an AI reasoning layer that:
-
-- **Chains findings into exploit paths** - connects leaked API keys, unauthenticated endpoints, and writable fields into real attack scenarios
-- **Mines public archives** - finds leaked UUIDs, auth tokens, and PII in Wayback Machine / CommonCrawl cached responses
-- **Reasons about business logic** - understands that a dev endpoint returning a real token means full account takeover, not just "endpoint exists"
-- **Confirms exploits in a real browser** - uses Playwright to walk multi-step attack chains end-to-end with screenshots
-
-| Capability | Nuclei | Burp Suite | hackprobe |
-|---|---|---|---|
-| Known CVE scanning | Yes | Yes | Yes (via nmap, sqlmap, dalfox) |
-| Business logic reasoning | No | Manual only | Yes — AI chains findings |
-| Archive mining (Wayback/CommonCrawl) | No | No | Yes — Stage 1C |
-| Multi-step exploit chains | No | Manual only | Yes — Stage 6 AI |
-| Browser-confirmed exploits | No | Manual | Yes — Playwright MCP |
-| OSINT + tech stack fingerprinting | No | Limited | Yes — Stage 1A/1E |
-| Runs inside Claude Code | No | No | Yes |
-
-## Architecture
-
-hackprobe runs in 6 sequential stages. Each stage spawns parallel sub-agents for maximum speed. Results are persisted to markdown files. Stage 6 is the AI orchestrator — it reads all results and reasons about business logic, chains findings, and scores by business impact.
-
-```
-Stage 1: OSINT & Recon           (6 parallel agents)
-    |
-Stage 2: Automated Scanning      (4 parallel agents)
-    |
-Stage 3: Browser Analysis        (Playwright MCP)
-    |
-Stage 4: Active Injection Testing (6 parallel agents)
-    |
-Stage 5: Deep Analysis           (5 parallel agents)
-    |
-Stage 6: AI Orchestrator          (reads all results, chains findings, generates report)
+# 2. Run
+claude /hackprobe https://your-target.com
 ```
 
-## Tool arsenal
-
-| Tool | Purpose |
-|---|---|
-| nmap, naabu | Port scanning + service detection |
-| sqlmap | SQL injection |
-| dalfox | XSS with browser confirmation |
-| ffuf, feroxbuster | Directory and parameter fuzzing |
-| testssl | SSL/TLS analysis |
-| subfinder, amass, dnsx | Subdomain enumeration |
-| httpx | HTTP probing + tech detection |
-| katana | Web crawling (headless browser) |
-| gau, waybackurls | Historical URL collection from archives |
-| trufflehog | Secret scanning with live API verification |
-| gf, qsreplace, uro, anew | URL classification and payload injection |
-| s3scanner | Cloud bucket access testing |
-| interactsh-client | Out-of-band callback (blind SSRF/XSS/XXE) |
-| subzy | Subdomain takeover detection |
-| crlfuzz | CRLF injection scanning |
-| jwt_tool | JWT attack suite (alg confusion, none alg, weak secrets) |
-| arjun | Hidden HTTP parameter discovery |
-| theHarvester | Passive OSINT (emails, subdomains, employee names) |
-| wafw00f | WAF fingerprinting |
-| Playwright MCP | Browser automation for SPA analysis and exploit confirmation |
+That's it. The skill runs a 6-stage audit and writes a structured report to `results/REPORT.md`.
 
 ## Setup
 
-### 1. Install tools
+**Requirements:** macOS or Linux, Go 1.21+, Python 3
+
+### Install tools
 
 ```bash
 bash install.sh
 ```
 
-Supports macOS (Homebrew) and Linux (apt/go/pip). Requires Go 1.21+ for ProjectDiscovery tools.
+Installs nmap, sqlmap, trufflehog, subfinder, and 20+ other tools via Homebrew (macOS) or apt/go/pip (Linux).
 
-The installer will verify all tools at the end and report any missing ones.
+### Add the skill
 
-### 2. Add the skill to Claude Code
+**Option A** - copy into your project:
+```bash
+cp SKILL.md .claude/skills/hackprobe/SKILL.md
+```
 
-Add the skill path to your Claude Code project or global settings:
-
+**Option B** - reference directly:
 ```json
 {
-  "skills": [
-    "/path/to/hackprobe/SKILL.md"
-  ]
+  "skills": ["/path/to/hackprobe/SKILL.md"]
 }
 ```
 
-Or place `SKILL.md` in your project's `.claude/skills/hackprobe/` directory.
-
-### 3. Configure Playwright MCP
-
-hackprobe uses the [Playwright MCP server](https://github.com/anthropics/mcp-playwright) for browser automation. Add it to your Claude Code MCP config:
+### Add Playwright MCP (optional, for browser testing)
 
 ```json
 {
@@ -107,56 +53,28 @@ hackprobe uses the [Playwright MCP server](https://github.com/anthropics/mcp-pla
 }
 ```
 
-### 4. Run
+## What it does
 
-```
-/hackprobe https://target.example.com
-```
+6 stages, each running parallel agents:
 
-hackprobe will ask for confirmation before starting active testing.
+1. **Recon** - subdomains, URLs, ports, tech stack, OSINT, DNS
+2. **Scanning** - secrets in JS, sensitive files, SSL, default credentials
+3. **Browser** - Playwright extracts client-side data, tests forms, navigates SPAs
+4. **Injection** - SQLi, XSS, SSRF, CORS, IDOR, CRLF
+5. **Deep analysis** - framework exploits, archive mining, GraphQL, cloud storage, API boundaries
+6. **AI Orchestrator** - reads all results, chains findings into exploit paths, generates report with CVSS scores
 
-## Output
-
-All results are written to a timestamped workspace (`/tmp/hackprobe_<timestamp>/results/`):
-
-```
-results/
-  01_osint.md            # Business intelligence
-  01_subdomains.md       # Subdomain enumeration
-  01_urls.md             # URL collection (live + archived)
-  01_infra.md            # Port scan + WAF
-  01_techstack.md        # Technology fingerprint
-  01_domain.md           # Domain intelligence + email security
-  02_defaults.md         # Default credentials
-  02_content.md          # Sensitive file discovery
-  02_secrets.md          # Secret scanning (trufflehog + custom patterns)
-  02_ssl_headers.md      # SSL/TLS + security headers
-  03_browser.md          # Playwright browser analysis
-  04_sqli.md             # SQL injection
-  04_xss.md              # Cross-site scripting
-  04_misc_injection.md   # SSRF, LFI, CORS, open redirect
-  04_http_methods.md     # HTTP methods + request smuggling
-  04_oob.md              # Out-of-band callbacks
-  04_crlf.md             # CRLF injection
-  04_graphql_websocket.md # GraphQL + WebSocket testing
-  05_archive_pii.md      # PII in public archives
-  05_api_sweep.md        # Unauthenticated API boundary testing
-  05_framework.md        # Framework-specific attack surfaces
-  05_cloud.md            # Cloud misconfigurations
-  05_business_logic.md   # Business logic vulnerabilities
-  06_playwright_confirmations.md  # Browser-confirmed exploit screenshots
-  REPORT.md              # Final structured report with CVSS scoring
-```
+The AI Orchestrator is the key. Stages 1-5 run standard tools. Stage 6 reasons about relationships between findings - connecting a leaked API key to an unvalidated billing endpoint to a subscription bypass. No scanner can express that check.
 
 ## Responsible use
 
-hackprobe is designed for authorized security testing only. Before running:
+This skill is for authorized security testing only.
 
-1. Ensure you have written authorization to test the target
-2. hackprobe will ask for explicit confirmation before starting
-3. Use test/throwaway emails (mailinator, guerrillamail) for registration probes
-4. Never submit real payment data during testing
-5. Report findings through responsible disclosure channels
+- Only test targets you own or have written permission to test
+- The skill asks for confirmation before every audit
+- Use throwaway emails for registration probes
+- Never submit real payment data
+- Report findings through responsible disclosure
 
 ## License
 
